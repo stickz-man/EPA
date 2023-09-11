@@ -1,0 +1,104 @@
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+from plotnine import aes, geom_point, geom_smooth, ggplot
+from shiny import App, Inputs, Outputs, Session, reactive, render, ui
+from shiny.plotutils import brushed_points, near_points
+
+# Hardcoded Excel file path
+filepath = "C:/Users/14432/Desktop/Pitt final.xlsx"
+df = pd.read_excel(filepath)
+
+# Read all sheets into a dictionary of DataFrames
+sheets = pd.read_excel(filepath, sheet_name=None)
+
+# Extract unique parameter names from the chosen sheet
+parameter_names = df["Parameter Name"].unique()
+
+# Convert the parameter names array to a list of strings
+parameter_names_list = parameter_names.tolist()
+
+# UI Definition
+app_ui = ui.page_fluid(
+    ui.input_date_range("x", "Date range input"),
+    ui.output_text_verbatim("txt"),
+    ui.head_content(
+        ui.tags.style(
+            """
+        pre, table.table {
+            font-size: smaller;
+        }
+        """
+        )
+    ),
+    ui.input_select(
+        "selected_params",
+        "Select Parameters:",
+        choices=parameter_names_list,
+        selected=parameter_names_list[:3],  # Default selection (first 3 parameters)
+        multiple=True,  # Allow multiple selection
+    ),
+    ui.row(
+        ui.column(2),
+        ui.column(
+            8,
+            ui.output_plot("plot1", click=True, brush=True),
+            ui.div(
+                {"style": "text-align: center"},
+                ui.input_action_button("exclude_toggle", "Toggle brushed points"),
+                ui.input_action_button("exclude_reset", "Reset"),
+            ),
+        ),
+    ),
+    ui.row(
+        ui.column(12, {"style": "margin-top: 15px;"}, ui.output_text_verbatim("model")),
+    ),
+    ui.row(
+        ui.column(12, {"style": "margin-top: 15px;"}, ui.input_action_button("submit_btn", "Submit")),
+    ),
+)
+
+# Server Definition
+
+def server(input: Inputs, output: Outputs, session: Session):
+    keep_rows = reactive.Value([True] * len(df))  # Define the keep_rows reactive value
+    @reactive.Calc
+    def data_with_keep():
+        selected_params = input.selected_params()
+        df_selected = df[df["Parameter Name"].isin(selected_params)].copy()
+        df_selected["keep"] = keep_rows()
+        return df_selected
+
+    @reactive.Effect
+    @reactive.event(input.submit_btn)
+    def _():
+        df = data_with_keep()
+        df_keep = df[df["keep"]]
+        df_grouped = df_keep.groupby("Parameter Name")["Arithmetic Mean"].mean().reset_index()
+
+        p = (
+            ggplot(df_grouped, aes(x="Parameter Name", y="Arithmetic Mean"))
+            + geom_point()
+            + geom_smooth(method="lm", fullrange=True)
+        )
+
+        # Render the plot to the "plot1" output
+        output.plot1(p)
+
+    @output
+    @render.plot()
+    def plot1():
+        pass  # Plot is generated in the submit_btn event
+
+    @output
+    @render.text()
+    def model():
+        df = data_with_keep()
+        df_keep = df[df["keep"]]
+        mod = sm.OLS(df_keep["Parameter Name"], df_keep["Arithmetic Mean"])
+        res = mod.fit()
+        return res.summary()
+
+app = App(app_ui, server)
