@@ -5,6 +5,7 @@ import plotly.express as px
 import openpyxl
 
 app = dash.Dash(__name__)
+server = app.server
 
 app.layout = html.Div([
     html.H1("Parameter Analysis"),
