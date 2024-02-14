@@ -1,61 +1,74 @@
 import dash
-from dash import dcc, html, Input, Output, State
+from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.express as px
-import openpyxl
+import requests
 
 app = dash.Dash(__name__)
-server = app.server
 
 app.layout = html.Div([
     html.H1("Parameter Analysis"),
-    dcc.Input(id='url', type='text', value='https://www.arcgis.com/sharing/rest/content/items/d364201435d94bb1a402036b78da0466/data'),
+    html.P("TO USE THE APP, CLICK ON 'LOAD DATA' TO LOAD DEFAULT DATA, THEN USE THE SEARCH BAR TO ADD PARAMETERS YOU WOULD LIKE TO ANALYSE"),
+    html.Button('Load Data', id='load-button', n_clicks=0),
     dcc.Dropdown(id='params', multi=True),
-    dcc.Graph(id='histogram'),
-    dcc.Store(id='data-store')  # Add a Store component to store the data
+    dcc.Graph(id='histogram')
 ])
 
 @app.callback(
     [Output('params', 'options'), Output('params', 'value')],
-    Output('data-store', 'data'),
-    Input('url', 'value')
+    Input('load-button', 'n_clicks'),
+    prevent_initial_call=True
 )
-def load_data(url):
-    xls = pd.ExcelFile(url)
-    param_choices = []
-    data_dict = {}
-    for sheet_name in xls.sheet_names:
-        data = pd.read_excel(url, sheet_name=sheet_name)
-        param_choices.extend(list(data['Parameter Name'].unique()))
-        data['Year'] = sheet_name  # Add 'Year' based on sheet name
-        data_dict[sheet_name] = data.to_json()
-    return [{'label': param, 'value': param} for param in param_choices], param_choices[0:3], data_dict
+def load_parameters(n_clicks):
+    query_url = "https://services2.arcgis.com/sJvSsHKKEOKRemAr/arcgis/rest/services/EPAPittFinal/FeatureServer/0/query"
+    params = {
+        "where": "1=1",  # This fetches all records
+        "f": "json",
+        "outFields": "Parameter_Name,Arithmetic_Mean",
+        "resultOffset": "0",
+        "resultRecordCount": "1000",
+    }
+
+    response = requests.get(query_url, params=params)
+    if response.status_code == 200:
+        data = response.json()['features']
+        df = pd.DataFrame([feature['attributes'] for feature in data])
+        parameters = df['Parameter_Name'].unique()
+        options = [{'label': param, 'value': param} for param in parameters]
+        return options, parameters.tolist()[0:3]  # Return the first 3 parameters as default selection
+    else:
+        return [], []
 
 @app.callback(
     Output('histogram', 'figure'),
-    Input('params', 'value'),
-    State('data-store', 'data')  # Access the data from the Store component
+    Input('params', 'value')
 )
-def update_histogram(selected_params, data_dict):
-    if data_dict is None:
+def update_histogram(selected_params):
+    if not selected_params:
         return {}
-    
-    filtered_data = []
-    for year, data_json in data_dict.items():
-        data = pd.read_json(data_json)
-        filtered_data.append(data[data['Parameter Name'].isin(selected_params)])
-    
-    combined_data = pd.concat(filtered_data)
-    
-    fig = px.histogram(combined_data, x='Arithmetic Mean', color='Parameter Name', facet_col='Year', barmode='group')
-    fig.update_layout(
-        title="Histogram of Arithmetic Means for Each Parameter and Year",
-        xaxis_title="Arithmetic Mean",
-        yaxis_title="Frequency",
-        legend=dict(orientation="h"),
-    )
-    
-    return fig
+
+    query_url = "https://services2.arcgis.com/sJvSsHKKEOKRemAr/arcgis/rest/services/EPAPittFinal/FeatureServer/0/query"
+    params = {
+        "where": f"Parameter_Name IN ({','.join([f"'{param}'" for param in selected_params])})",
+        "f": "json",
+        "outFields": "Parameter_Name,Arithmetic_Mean",
+        "resultOffset": "0",
+        "resultRecordCount": "1000",
+    }
+
+    response = requests.get(query_url, params=params)
+    if response.status_code == 200:
+        data = response.json()['features']
+        df = pd.DataFrame([feature['attributes'] for feature in data])
+        fig = px.histogram(df, x='Arithmetic_Mean', color='Parameter_Name', barmode='group')
+        fig.update_layout(
+            title="Histogram of Arithmetic Means for Selected Parameters",
+            xaxis_title="Arithmetic Mean",
+            yaxis_title="Count"
+        )
+        return fig
+    else:
+        return {}
 
 if __name__ == '__main__':
     app.run_server(debug=True)
