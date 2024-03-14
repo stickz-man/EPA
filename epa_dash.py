@@ -1,74 +1,82 @@
+from dash import dcc, html, Input, Output, State, callback, dcc
 import dash
-from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import requests
+from datetime import datetime as dt
+
 
 app = dash.Dash(__name__)
 
+# Setup for DatePickerRange component with an allowable date range
 app.layout = html.Div([
     html.H1("Parameter Analysis"),
-    html.P("TO USE THE APP, CLICK ON 'LOAD DATA' TO LOAD DEFAULT DATA, THEN USE THE SEARCH BAR TO ADD PARAMETERS YOU WOULD LIKE TO ANALYSE"),
-    html.Button('Load Data', id='load-button', n_clicks=0),
+    dcc.DatePickerRange(
+        id='date-picker-range',
+        min_date_allowed=dt(2019, 1, 1),
+        max_date_allowed=dt(2022, 12, 31),
+        start_date=dt(2019, 1, 1),
+        end_date=dt(2022, 12, 31)
+    ),
     dcc.Dropdown(id='params', multi=True),
+    html.Button('Update Graph', id='update-graph-button', n_clicks=0),
     dcc.Graph(id='histogram')
 ])
 
-@app.callback(
-    [Output('params', 'options'), Output('params', 'value')],
-    Input('load-button', 'n_clicks'),
-    prevent_initial_call=True
-)
-def load_parameters(n_clicks):
+
+def fetch_data_from_api(start_date, end_date):
+    """Fetch and filter data from the ArcGIS REST API based on the selected date range."""
     query_url = "https://services2.arcgis.com/sJvSsHKKEOKRemAr/arcgis/rest/services/EPAPittFinal/FeatureServer/0/query"
     params = {
-        "where": "1=1",  # This fetches all records
+        "where": f"Date_Local >= DATE '{start_date.strftime('%Y-%m-%d')}' AND Date_Local <= DATE '{end_date.strftime('%Y-%m-%d')}'",
+        "outFields": "*",
         "f": "json",
-        "outFields": "Parameter_Name,Arithmetic_Mean",
         "resultOffset": "0",
-        "resultRecordCount": "1000",
+        "resultRecordCount": "2000",
     }
 
     response = requests.get(query_url, params=params)
     if response.status_code == 200:
         data = response.json()['features']
         df = pd.DataFrame([feature['attributes'] for feature in data])
-        parameters = df['Parameter_Name'].unique()
-        options = [{'label': param, 'value': param} for param in parameters]
-        return options, parameters.tolist()[0:3]  # Return the first 3 parameters as default selection
+        return df
     else:
-        return [], []
+        print(f"Failed to fetch data: {response.status_code}")
+        return pd.DataFrame()
+
+
+@app.callback(
+    [Output('params', 'options'), Output('params', 'value')],
+    [Input('update-graph-button', 'n_clicks')],
+    [State('date-picker-range', 'start_date'), State('date-picker-range', 'end_date')]
+)
+def update_parameters_options(n_clicks, start_date, end_date):
+    if n_clicks > 0:
+        df = fetch_data_from_api(pd.to_datetime(start_date), pd.to_datetime(end_date))
+        if not df.empty:
+            parameters = df['Parameter_Name'].unique()
+            options = [{'label': param, 'value': param} for param in parameters]
+            return options, parameters.tolist()[0:3]
+    return [], []
+
 
 @app.callback(
     Output('histogram', 'figure'),
-    Input('params', 'value')
+    [Input('update-graph-button', 'n_clicks')],
+    [State('params', 'value'), State('date-picker-range', 'start_date'), State('date-picker-range', 'end_date')]
 )
-def update_histogram(selected_params):
-    if not selected_params:
-        return {}
+def update_histogram(n_clicks, selected_params, start_date, end_date):
+    if n_clicks > 0 and selected_params:
+        df = fetch_data_from_api(pd.to_datetime(start_date), pd.to_datetime(end_date))
+        if not df.empty:
+            filtered_df = df[df['Parameter_Name'].isin(selected_params)]
+            fig = px.histogram(filtered_df, x='Arithmetic_Mean', color='Parameter_Name', barmode='group',
+                               labels={'Arithmetic_Mean': 'Arithmetic Mean'},
+                               title='Histogram of Arithmetic Means for Selected Parameters Over Time')
+            return fig
+    return go.Figure()
 
-    query_url = "https://services2.arcgis.com/sJvSsHKKEOKRemAr/arcgis/rest/services/EPAPittFinal/FeatureServer/0/query"
-    params = {
-        "where": f"Parameter_Name IN ({','.join([f"'{param}'" for param in selected_params])})",
-        "f": "json",
-        "outFields": "Parameter_Name,Arithmetic_Mean",
-        "resultOffset": "0",
-        "resultRecordCount": "1000",
-    }
-
-    response = requests.get(query_url, params=params)
-    if response.status_code == 200:
-        data = response.json()['features']
-        df = pd.DataFrame([feature['attributes'] for feature in data])
-        fig = px.histogram(df, x='Arithmetic_Mean', color='Parameter_Name', barmode='group')
-        fig.update_layout(
-            title="Histogram of Arithmetic Means for Selected Parameters",
-            xaxis_title="Arithmetic Mean",
-            yaxis_title="Count"
-        )
-        return fig
-    else:
-        return {}
 
 if __name__ == '__main__':
     app.run_server(debug=True)
