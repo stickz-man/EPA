@@ -45,7 +45,7 @@ app.layout = html.Div([
 
 
 def fetch_data_from_api(start_date, end_date):
-    query_url = "https://services2.arcgis.com/sJvSsHKKEOKRemAr/arcgis/rest/services/EPAPittFinal/FeatureServer/0/query"
+    query_url = "modify with the EPA endpoint" //modify with your EPA endpoint
     params = {
         "where": f"Date_Local >= DATE '{start_date.strftime('%Y-%m-%d')}' AND Date_Local <= DATE '{end_date.strftime('%Y-%m-%d')}'",
         "outFields": "*",
